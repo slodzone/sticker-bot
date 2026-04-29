@@ -7,6 +7,7 @@ const BOT_USERNAME = process.env.BOT_USERNAME!;
 
 const awaitingTitle: Record<number, boolean> = {};
 const awaitingSticker: Record<number, string> = {};
+const awaitingEmoji: Record<number, string> = {};
 const awaitingDeleteChoice: Record<number, string> = {};
 const awaitingRename: Record<number, string> = {};
 
@@ -101,7 +102,17 @@ export async function POST(req: NextRequest) {
         fileUniqueId = largest.file_unique_id;
       }
 
-      const stickerObj = { sticker: fileId, emoji_list: ["🎉"] };
+      awaitingEmoji[userId] = JSON.stringify({ ...ctx, fileId, fileUniqueId });
+      await sendMessage(chatId, "Which emoji should represent this sticker? Send one emoji 👇");
+      return NextResponse.json({ ok: true });
+    }
+
+    if (awaitingEmoji[userId] && !text.startsWith("/")) {
+      const ctx = JSON.parse(awaitingEmoji[userId]);
+      delete awaitingEmoji[userId];
+
+      const emoji = text.trim();
+      const stickerObj = { sticker: ctx.fileId, emoji_list: [emoji] };
 
       if (ctx.isNew) {
         await createNewStickerSet(userId, ctx.packName, ctx.title, stickerObj);
@@ -111,7 +122,7 @@ export async function POST(req: NextRequest) {
           title: ctx.title,
           ownerId: userId,
           pin: ctx.pin,
-          stickers: [{ fileId, fileUniqueId, emoji: "🎉" }],
+          stickers: [{ fileId: ctx.fileId, fileUniqueId: ctx.fileUniqueId, emoji }],
         });
         await sendMessage(chatId,
           `✅ Pack "<b>${ctx.title}</b>" created!\n\n` +
@@ -124,7 +135,7 @@ export async function POST(req: NextRequest) {
         const pack = await getPack(ctx.packId);
         if (!pack) { await sendMessage(chatId, "Pack not found."); return NextResponse.json({ ok: true }); }
         await addStickerToSet(userId, ctx.packName, stickerObj);
-        const updated = [...pack.stickers, { fileId, fileUniqueId, emoji: "🎉" }];
+        const updated = [...pack.stickers, { fileId: ctx.fileId, fileUniqueId: ctx.fileUniqueId, emoji }];
         await updatePackStickers(ctx.packId, updated);
         await sendMessage(chatId, `✅ Sticker added to "<b>${pack.title}</b>"!`);
       }
