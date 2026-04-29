@@ -1,11 +1,20 @@
-export default function Home() {
-  return (
-    <main style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "100vh", fontFamily: "system-ui, sans-serif" }}>
-      <div style={{ textAlign: "center", padding: 32 }}>
-        <h1 style={{ fontSize: 48, margin: "0 0 16px" }}>🎨</h1>
-        <h2 style={{ fontSize: 24, margin: "0 0 8px" }}>StickerCollab Bot</h2>
-        <p style={{ color: "#666" }}>Open your sticker pack link to start editing.</p>
-      </div>
-    </main>
-  );
+{
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
 }
