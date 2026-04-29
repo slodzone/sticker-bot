@@ -10,6 +10,8 @@ const awaitingSticker: Record<number, string> = {};
 const awaitingEmoji: Record<number, string> = {};
 const awaitingDeleteChoice: Record<number, string> = {};
 const awaitingRename: Record<number, string> = {};
+const awaitingJoinPin: Record<number, boolean> = {};
+const awaitingJoinPackId: Record<number, string> = {}; // userId → packId after pin check
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-telegram-bot-api-secret-token");
@@ -35,12 +37,53 @@ export async function POST(req: NextRequest) {
         `/addsticker — Add a sticker to your pack\n` +
         `/deletesticker — Remove a sticker\n` +
         `/renamepack — Rename your pack\n` +
-        `/sharepack — Get the collaboration link\n\n` +
+        `/sharepack — Get the collaboration link\n` +
+        `/join — Join someone's pack with a link + PIN\n\n` +
         `Start with /newpack 🎨`
       );
       return NextResponse.json({ ok: true });
     }
 
+    // ── /join ─────────────────────────────────────────────────────────────────
+    if (text.startsWith("/join")) {
+      // Support both "/join" and "/join_<packId>"
+      const parts = text.split("_");
+      if (parts.length > 1) {
+        const packId = parts.slice(1).join("_");
+        const pack = await getPack(packId);
+        if (!pack) { await sendMessage(chatId, "Pack not found. Check the link."); return NextResponse.json({ ok: true }); }
+        awaitingJoinPin[userId] = true;
+        awaitingJoinPackId[userId] = packId;
+        await sendMessage(chatId, `🔐 Send me the 4-digit PIN to join "<b>${pack.title}</b>":`);
+      } else {
+        await sendMessage(chatId, `To join a pack, use the link shared with you.\n\nIt looks like:\n${BASE_URL}/pack/XXXXXXXX\n\nOr ask the owner to share /join_PACKID and the PIN.`);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── Awaiting join PIN ─────────────────────────────────────────────────────
+    if (awaitingJoinPin[userId] && !text.startsWith("/")) {
+      const packId = awaitingJoinPackId[userId];
+      const pack = await getPack(packId);
+      if (!pack) { await sendMessage(chatId, "Pack not found."); delete awaitingJoinPin[userId]; return NextResponse.json({ ok: true }); }
+
+      if (pack.pin !== text.trim()) {
+        await sendMessage(chatId, "❌ Wrong PIN. Try again or use /join again.");
+        delete awaitingJoinPin[userId];
+        return NextResponse.json({ ok: true });
+      }
+
+      delete awaitingJoinPin[userId];
+      // Store that this user can add to this pack
+      awaitingSticker[userId] = JSON.stringify({ packId: pack.packId, packName: pack.telegramPackName, isNew: false, ownerId: pack.ownerId });
+      await sendMessage(chatId,
+        `✅ PIN correct! You joined "<b>${pack.title}</b>"!\n\n` +
+        `📎 Send me a sticker image to add it to the pack:`
+      );
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── /newpack ──────────────────────────────────────────────────────────────
     if (text === "/newpack") {
       awaitingTitle[userId] = true;
       await sendMessage(chatId, "📝 What should the sticker pack be called? Send me the title:");
@@ -54,18 +97,19 @@ export async function POST(req: NextRequest) {
       const pin = generatePin();
       const packName = `pack_${packId}_by_${BOT_USERNAME}`;
       await sendMessage(chatId, `⏳ Creating your sticker pack "<b>${title}</b>"...\n\nSend me the <b>first sticker</b> image (PNG or WebP):`);
-      awaitingSticker[userId] = JSON.stringify({ packId, packName, title, pin, isNew: true });
+      awaitingSticker[userId] = JSON.stringify({ packId, packName, title, pin, isNew: true, ownerId: userId });
       return NextResponse.json({ ok: true });
     }
 
+    // ── /addsticker ───────────────────────────────────────────────────────────
     if (text === "/addsticker") {
       const packs = await getPackByOwner(userId);
       if (packs.length === 0) {
-        await sendMessage(chatId, "You have no packs yet. Use /newpack to create one.");
+        await sendMessage(chatId, "You have no packs yet.\n\nUse /newpack to create one, or /join to join someone else's pack.");
         return NextResponse.json({ ok: true });
       }
       if (packs.length === 1) {
-        awaitingSticker[userId] = JSON.stringify({ packId: packs[0].packId, packName: packs[0].telegramPackName, isNew: false });
+        awaitingSticker[userId] = JSON.stringify({ packId: packs[0].packId, packName: packs[0].telegramPackName, isNew: false, ownerId: userId });
         await sendMessage(chatId, `📎 Send me the sticker image to add to "<b>${packs[0].title}</b>":`);
       } else {
         const list = packs.map((p, i) => `${i + 1}. ${p.title} — /addto_${p.packId}`).join("\n");
@@ -78,11 +122,12 @@ export async function POST(req: NextRequest) {
       const packId = text.replace("/addto_", "").trim();
       const pack = await getPack(packId);
       if (!pack || pack.ownerId !== userId) { await sendMessage(chatId, "Pack not found."); return NextResponse.json({ ok: true }); }
-      awaitingSticker[userId] = JSON.stringify({ packId: pack.packId, packName: pack.telegramPackName, isNew: false });
+      awaitingSticker[userId] = JSON.stringify({ packId: pack.packId, packName: pack.telegramPackName, isNew: false, ownerId: userId });
       await sendMessage(chatId, `📎 Send me the sticker image to add to "<b>${pack.title}</b>":`);
       return NextResponse.json({ ok: true });
     }
 
+    // ── Received sticker image ────────────────────────────────────────────────
     if (awaitingSticker[userId] && (msg.photo || msg.document || msg.sticker)) {
       const ctx = JSON.parse(awaitingSticker[userId]);
       delete awaitingSticker[userId];
@@ -107,6 +152,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ── Received emoji ────────────────────────────────────────────────────────
     if (awaitingEmoji[userId] && !text.startsWith("/")) {
       const ctx = JSON.parse(awaitingEmoji[userId]);
       delete awaitingEmoji[userId];
@@ -115,12 +161,12 @@ export async function POST(req: NextRequest) {
       const stickerObj = { sticker: ctx.fileId, emoji_list: [emoji] };
 
       if (ctx.isNew) {
-        await createNewStickerSet(userId, ctx.packName, ctx.title, stickerObj);
+        await createNewStickerSet(ctx.ownerId, ctx.packName, ctx.title, stickerObj);
         await createPack({
           packId: ctx.packId,
           telegramPackName: ctx.packName,
           title: ctx.title,
-          ownerId: userId,
+          ownerId: ctx.ownerId,
           pin: ctx.pin,
           stickers: [{ fileId: ctx.fileId, fileUniqueId: ctx.fileUniqueId, emoji }],
         });
@@ -134,7 +180,8 @@ export async function POST(req: NextRequest) {
       } else {
         const pack = await getPack(ctx.packId);
         if (!pack) { await sendMessage(chatId, "Pack not found."); return NextResponse.json({ ok: true }); }
-        await addStickerToSet(userId, ctx.packName, stickerObj);
+        // Use ownerId for Telegram API (pack belongs to owner)
+        await addStickerToSet(pack.ownerId, ctx.packName, stickerObj);
         const updated = [...pack.stickers, { fileId: ctx.fileId, fileUniqueId: ctx.fileUniqueId, emoji }];
         await updatePackStickers(ctx.packId, updated);
         await sendMessage(chatId, `✅ Sticker added to "<b>${pack.title}</b>"!`);
@@ -142,6 +189,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ── /deletesticker ────────────────────────────────────────────────────────
     if (text === "/deletesticker") {
       const packs = await getPackByOwner(userId);
       if (packs.length === 0) { await sendMessage(chatId, "You have no packs."); return NextResponse.json({ ok: true }); }
@@ -182,6 +230,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ── /renamepack ───────────────────────────────────────────────────────────
     if (text === "/renamepack") {
       const packs = await getPackByOwner(userId);
       if (packs.length === 0) { await sendMessage(chatId, "You have no packs."); return NextResponse.json({ ok: true }); }
@@ -216,6 +265,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ── /mypacks ──────────────────────────────────────────────────────────────
     if (text === "/mypacks") {
       const packs = await getPackByOwner(userId);
       if (packs.length === 0) { await sendMessage(chatId, "You have no packs yet. Use /newpack!"); return NextResponse.json({ ok: true }); }
@@ -226,13 +276,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // ── /sharepack ────────────────────────────────────────────────────────────
     if (text === "/sharepack") {
       const packs = await getPackByOwner(userId);
       if (packs.length === 0) { await sendMessage(chatId, "You have no packs yet."); return NextResponse.json({ ok: true }); }
       const list = packs.map((p) =>
-        `📦 <b>${p.title}</b>\n🔗 ${BASE_URL}/pack/${p.packId}\n🔑 PIN: <b>${p.pin}</b>`
+        `📦 <b>${p.title}</b>\n🔗 ${BASE_URL}/pack/${p.packId}\n🔑 PIN: <b>${p.pin}</b>\n\nCollaborators can join via bot: /join_${p.packId}`
       ).join("\n\n");
-      await sendMessage(chatId, `Share these links + PINs:\n\n${list}`);
+      await sendMessage(chatId, `Share these with collaborators:\n\n${list}`);
       return NextResponse.json({ ok: true });
     }
 
